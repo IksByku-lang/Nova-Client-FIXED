@@ -1,0 +1,143 @@
+name: Nova Client - Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - nova
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'launcher/**'
+      - 'crates/**'
+      - 'third_party/**'
+      - 'tools/**'
+      - '.cargo/**'
+      - '.github/workflows/nova-windows-build.yml'
+      - 'docs/java-bridge-beta.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nova-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HORIZON_TELEMETRY_URL: "off"
+  RUSTFLAGS: "-C target-feature=+crt-static"
+  # Keep this fork's launcher from replacing itself with the upstream Horizon launcher.
+  HORIZON_LAUNCHER_NO_SELF_UPDATE: "1"
+
+jobs:
+  build-windows-x64:
+    name: Build Nova Client (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust and Cargo
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Java 25 (required by the Java bridge build)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          workspaces: |
+            . -> target
+            launcher -> launcher/target
+          shared-key: nova-windows-x64
+
+      - name: Show build tool versions
+        shell: pwsh
+        run: |
+          rustc --version
+          cargo --version
+          python --version
+          java -version
+
+      - name: Build game with Java mod bridge enabled
+        shell: pwsh
+        run: cargo build --profile fast --locked -p horizon-client --features horizon-client/java-mods
+
+      - name: Build launcher
+        shell: pwsh
+        run: cargo build --release --locked --manifest-path launcher/Cargo.toml
+
+      - name: Assemble Nova Client package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $PWD 'dist/NovaClient-Windows-x64'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $game = Join-Path $PWD 'target/fast/horizon-client.exe'
+          $launcher = Join-Path $PWD 'launcher/target/release/horizon-launcher.exe'
+          if (!(Test-Path $game)) { throw "Game executable not found: $game" }
+          if (!(Test-Path $launcher)) { throw "Launcher executable not found: $launcher" }
+
+          Copy-Item $game (Join-Path $dist 'horizon-client.exe')
+          Copy-Item $launcher (Join-Path $dist 'horizon-launcher.exe')
+          @'
+          NOVA CLIENT - WINDOWS X64 DEVELOPMENT BUILD
+
+          This package was compiled by GitHub Actions from the Nova Client source tree.
+          It contains the game executable built with the experimental Java mod bridge
+          and the launcher executable.
+
+          FIRST USE:
+          1. Extract this ZIP to a folder.
+          2. Open PowerShell in that folder.
+          3. Sign in and prepare your Minecraft 26.3 instance using the launcher first.
+          4. Run: $env:HORIZON_LAUNCHER_NO_SELF_UPDATE='1'
+          5. Run: .\horizon-launcher.exe java-mods use-build .\horizon-client.exe
+          6. Start the game from the launcher and enable Java/Fabric mods for the instance.
+
+          IMPORTANT:
+          - This is a development build, not a finished or officially supported release.
+          - The Java mod bridge is beta and does not support every Fabric mod.
+          - Keep backups of worlds before testing.
+          - Follow docs/java-bridge-beta.md in the source repository for all requirements.
+          '@ | Set-Content -Encoding UTF8 (Join-Path $dist 'README-NOVA-BUILD.txt')
+
+          Compress-Archive -Path (Join-Path $dist '*') -DestinationPath (Join-Path $PWD 'dist/NovaClient-Windows-x64.zip') -Force
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: NovaClient-Windows-x64
+          path: dist/NovaClient-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        if: always()
+        shell: pwsh
+        run: |
+          "## Nova Client - Windows x64" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- Rust/Cargo: installed by rustup on the GitHub runner" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- Game: horizon-client with horizon-client/java-mods" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- Launcher: horizon-launcher (release build)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if (Test-Path 'dist/NovaClient-Windows-x64.zip') {
+            "- Artifact: NovaClient-Windows-x64.zip" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          } else {
+            "- Artifact was not produced; inspect the failed build step above." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }

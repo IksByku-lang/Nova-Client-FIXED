@@ -1,0 +1,44 @@
+/.local/
+/target/
+**/__pycache__/
+*.py[cod]
+/.venv/
+# Downloaded/decompiled game content and private profiling artifacts.
+*.jar
+*.class
+*.jfr
+*.hprof
+/decompiled/
+/minecraft/
+/assets/
+/run/
+/logs/
+/dist/
+/mods/horizon/build/
+/saves/
+/backups/
+/tools/logs/
+.DS_Store
+# What the client writes to its working directory when run from the repo root.
+/options.txt
+/debug-profile.json
+/horizon.txt
+/horizon-graphics.txt
+/horizon-controller.txt
+/horizon-extras.txt
+/horizon-player.txt
+/servers.dat
+/mods-java/
+/screenshots/
+/.horizon-cache/
+/crash-reports/
+/debug/
+
+# Release-only compiled original exporter bundle.
+/exporters/
+# Minecraft's logger writes logs/ where the bridge's tests run.
+/crates/horizon-jvm/logs/
+/crates/horizon-jvm/world/
+# Fabric mods write config/ in the game folder (mods-java/ beside it).
+/config/
+/crates/horizon-jvm/config/

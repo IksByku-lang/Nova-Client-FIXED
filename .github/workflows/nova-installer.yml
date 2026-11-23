@@ -1,0 +1,138 @@
+name: Nova Client - Windows installer
+
+# Builds Nova Client on GitHub's Windows runner and publishes a ready-to-run installer, so nothing has to be
+# built on a player's computer. The installer is the launcher's own binary under a name that starts with
+# `horizon-launcher-setup` (launcher/src/installer.rs): double-clicked, it opens the per-user installer
+# (no administrator needed), exactly like Horizon's own setup.
+#
+# Run it by hand:   Actions > "Nova Client - Windows installer" > Run workflow, then download the artifact.
+# Or publish a release: push a tag such as nova-v0.1.0 and the installer is attached to a GitHub release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'nova-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nova-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HORIZON_TELEMETRY_URL: "off"
+  RUSTFLAGS: "-C target-feature=+crt-static"
+  # Compile-time switch (launcher/src/backend.rs): a Nova Client launcher never replaces itself with the
+  # official Horizon launcher.
+  HORIZON_LAUNCHER_NO_SELF_UPDATE: "1"
+
+jobs:
+  installer:
+    name: Build the Nova Client installer (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust and Cargo
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Java 25 (required by the Java bridge build)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          workspaces: |
+            . -> target
+            launcher -> launcher/target
+          shared-key: nova-installer-x64
+
+      # A failing test is shown in the log and in the summary but does not stop the installer from being built.
+      - name: Unit tests of the launcher (including the Nova modules)
+        continue-on-error: true
+        shell: pwsh
+        run: cargo test --locked --manifest-path launcher/Cargo.toml
+
+      - name: Build the game (with the Java mod bridge and the Nova HUD)
+        shell: pwsh
+        run: cargo build --profile fast --locked -p horizon-client --features horizon-client/java-mods
+
+      - name: Build the launcher
+        shell: pwsh
+        run: cargo build --release --locked --manifest-path launcher/Cargo.toml
+
+      - name: Assemble the installer and the game build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $launcher = Join-Path $PWD 'launcher/target/release/horizon-launcher.exe'
+          $game = Join-Path $PWD 'target/fast/horizon-client.exe'
+          if (!(Test-Path $launcher)) { throw "Launcher executable not found: $launcher" }
+          if (!(Test-Path $game)) { throw "Game executable not found: $game" }
+
+          # The installer: the launcher under a `horizon-launcher-setup...` name.
+          Copy-Item $launcher (Join-Path $dist 'horizon-launcher-setup-NovaClient.exe')
+
+          # The game build that carries the Java Bridge and the Nova HUD, with a script that points the
+          # installed launcher at it.
+          $pack = Join-Path $dist 'NovaClient-GameBuild'
+          New-Item -ItemType Directory -Force -Path $pack | Out-Null
+          Copy-Item $game (Join-Path $pack 'horizon-client.exe')
+          @'
+          @echo off
+          rem Points the installed Nova Client launcher at this folder's game build (Java Bridge and Nova HUD).
+          set HORIZON_LAUNCHER_NO_SELF_UPDATE=1
+          set "L=%LOCALAPPDATA%\Programs\Horizon Launcher\horizon-launcher.exe"
+          if not exist "%L%" (
+              echo Nova Client is not installed yet. Run horizon-launcher-setup-NovaClient.exe first.
+              pause
+              exit /b 1
+          )
+          "%L%" java-mods use-build "%~dp0horizon-client.exe"
+          echo.
+          echo Done if no error is shown above. Start the game from Nova Client.
+          pause
+          '@ | Set-Content -Encoding ASCII (Join-Path $pack 'USE-NOVA-GAME-BUILD.bat')
+          Compress-Archive -Path (Join-Path $pack '*') -DestinationPath (Join-Path $dist 'NovaClient-GameBuild.zip') -Force
+          Remove-Item -Recurse -Force $pack
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: NovaClient-Installer
+          path: |
+            dist/horizon-launcher-setup-NovaClient.exe
+            dist/NovaClient-GameBuild.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to a GitHub release (tags only)
+        if: startsWith(github.ref, 'refs/tags/nova-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            dist/horizon-launcher-setup-NovaClient.exe `
+            dist/NovaClient-GameBuild.zip `
+            --title "Nova Client ${{ github.ref_name }}" `
+            --notes "Run horizon-launcher-setup-NovaClient.exe to install Nova Client (per user, no administrator). NovaClient-GameBuild.zip is the optional game build with the Java Bridge and the Nova HUD: see README-NOVA.md."
