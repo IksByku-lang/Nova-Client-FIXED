@@ -249,9 +249,10 @@ pub fn plain_path(path: &Path) -> PathBuf {
     horizon_prepare::java::without_verbatim(path.to_path_buf())
 }
 
-/// The Java home to run mods with: `HORIZON_JAVA_HOME`, else a Java [`JAVA_MAJOR`] or newer
-/// from `JAVA_HOME`, the PATH, Minecraft's own runtimes (`horizon_prepare::java`) or the ones
-/// Horizon's launcher downloaded ([`runtime::runtime_dir`]).
+/// The JDK home to run mods with and compile the bridge/platform jars: `javac` is required
+/// because release builds carry Java sources and compile them on the player's machine. Finds a
+/// compatible JDK (not merely a runtime) from `JAVA_HOME`, PATH, installed JDKs, Minecraft's
+/// runtimes or the ones Horizon's launcher downloaded ([`runtime::runtime_dir`]).
 pub fn find_java_home() -> Result<PathBuf, String> {
     if let Some(home) = std::env::var_os(JAVA_HOME_VAR).filter(|h| !h.is_empty()) {
         return Ok(plain_path(Path::new(&home)));
@@ -271,7 +272,7 @@ pub fn find_java_home() -> Result<PathBuf, String> {
                 format!("no Java {JAVA_MAJOR} among Minecraft's runtimes (HORIZON_JAVA_NO_SYSTEM)")
             });
     }
-    let jdk = horizon_prepare::java::find_runtime(JAVA_MAJOR, &runtimes)?;
+    let jdk = horizon_prepare::java::find(JAVA_MAJOR, &runtimes)?;
     let java = horizon_prepare::java::real_path(jdk.java);
     java.parent()
         .and_then(Path::parent)
